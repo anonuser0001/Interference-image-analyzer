@@ -1,0 +1,17 @@
+[package]
+name = "interference_graph_gui"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+egui = "0.22.0"
+eframe = "0.22.0"
+env_logger = "0.10.0"
+rfd = "0.11.4"
+raster = "0.2.0"
+egui_extras = "0.22.0"
+image = { version = "0.24", features = ["jpeg", "png"] }
+clipboard = "0.5.0"
+egui-notify = "0.7.0"
