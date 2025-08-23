@@ -7,6 +7,7 @@ use raster::Image;
 
 use crate::app::AppWindow;
 use egui::plot::{Line, Plot, PlotPoints};
+use image::{Rgb, RgbaImage};
 
 #[derive(PartialEq)]
 enum Channel {
@@ -22,20 +23,26 @@ enum Mode {
 
 pub struct InterferencePlot {
     path: String,
-    image: raster::Image,
+    image: RgbaImage,
     show: bool,
     channel: Channel,
     mode: Mode,
-    line_index: i32,
+    line_index: u32,
     toasts: Toasts,
-    to_summarize: Vec<i32>,
+    to_summarize: Vec<u32>,
 }
 
 impl InterferencePlot {
+
+    fn load_image_from_path(path: String) -> Result<RgbaImage, image::ImageError> {
+        let image = image::io::Reader::open(path)?.decode()?;
+        Ok(image.to_rgba8())
+    }
+
     pub fn new(path: String) -> InterferencePlot {
         InterferencePlot {
             path: path.clone(),
-            image: raster::open(path.as_str()).unwrap(),
+            image: Self::load_image_from_path(path.clone()).unwrap(),
             show: true,
             channel: Channel::Red,
             mode: Mode::Individual,
@@ -90,13 +97,13 @@ impl AppWindow for InterferencePlot {
                                 ui.add(
                                     egui::Slider::new(
                                         &mut self.line_index,
-                                        0..=(self.image.width - 1),
+                                        0..=(self.image.width() - 1),
                                     )
                                     .step_by(1.0)
                                     .suffix("px"),
                                 );
                                 if ui.button("+").clicked() {
-                                    if self.line_index < self.image.width - 1 {
+                                    if self.line_index < self.image.width() - 1 {
                                         self.line_index += 1;
                                     }
                                 }
@@ -115,6 +122,9 @@ impl AppWindow for InterferencePlot {
                                             self.to_summarize.remove(pos);
                                         }
                                     }
+                                }
+                                if ui.button("Sum all graphs").clicked() {
+                                    self.to_summarize = (0..self.image.width()).collect();
                                 }
                             });
                         }
@@ -203,7 +213,7 @@ impl AppWindow for InterferencePlot {
                             ui.add_space(30.0);
                             ui.label(RichText::new("Graphs to summarize:").strong());
                             egui::ScrollArea::vertical().show(ui, |ui| {
-                                let mut points_to_remove: Vec<i32> = vec![];
+                                let mut points_to_remove: Vec<u32> = vec![];
                                 for pixel in self.to_summarize.iter() {
                                     ui.horizontal(|ui| {
                                         let points = get_points(
@@ -257,7 +267,7 @@ impl AppWindow for InterferencePlot {
     }
 }
 
-fn get_sum_points(image: &Image, color_channel: &str, x_coords: &Vec<i32>) -> Vec<[f64; 2]> {
+fn get_sum_points(image: &RgbaImage, color_channel: &str, x_coords: &Vec<u32>) -> Vec<[f64; 2]> {
     let mut sum_points: Vec<[f64; 2]> = vec![];
     for x in x_coords {
         let points = get_points(&image, color_channel, x.to_owned());
@@ -274,36 +284,37 @@ fn get_sum_points(image: &Image, color_channel: &str, x_coords: &Vec<i32>) -> Ve
     }
 
     let mut max_y = 0.0;
+    let mut max_x = 0.0;
     for i in 0..sum_points.len() {
         sum_points[i][0] /= x_coords.len() as f64;
         sum_points[i][1] /= x_coords.len() as f64;
 
         if sum_points[i][1] > max_y {
             max_y = sum_points[i][1];
+            max_x = sum_points[i][0];
         }
+    }
+
+    for i in 0..sum_points.iter().len() {
+        sum_points[i][0] -= max_x;
     }
 
     sum_points
 }
 
-fn get_points(image: &Image, color_channel: &str, x_coord: i32) -> Vec<[f64; 2]> {
+fn get_points(image: &RgbaImage, color_channel: &str, x_coord: u32) -> Vec<[f64; 2]> {
     let mut points = vec![];
-    for i in 0..image.height {
-        let pixel = image.get_pixel(x_coord, i).unwrap();
+    for i in 0..image.height() {
+        let pixel = image.get_pixel(x_coord, i);
         if color_channel.eq("r") {
-            points.push([i as f64, pixel.r as f64]);
+            points.push([i as f64, pixel[0] as f64]);
         } else if color_channel.eq("g") {
-            points.push([i as f64, pixel.g as f64]);
+            points.push([i as f64, pixel[1] as f64]);
         }
     }
-    let mut min_y = 255.0;
     let mut max_y = 0.0;
     let mut max_x = 0.0;
     for point in points.iter() {
-        if point[1] < min_y {
-            min_y = point[1];
-        }
-
         if point[1] > max_y {
             max_y = point[1];
             max_x = point[0];
@@ -311,8 +322,6 @@ fn get_points(image: &Image, color_channel: &str, x_coord: i32) -> Vec<[f64; 2]>
     }
 
     for i in 0..points.iter().len() {
-        points[i][1] -= min_y;
-        points[i][1] /= max_y - min_y;
         points[i][0] -= max_x;
     }
 
