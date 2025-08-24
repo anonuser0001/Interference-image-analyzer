@@ -1,13 +1,12 @@
 use egui_notify::Toasts;
 use std::borrow::BorrowMut;
+use std::collections::HashSet;
 use std::time::Duration;
-
 use egui::{Color32, RichText};
-use raster::Image;
 
 use crate::app::AppWindow;
 use egui::plot::{Line, Plot, PlotPoints};
-use image::{Rgb, RgbaImage};
+use image::RgbaImage;
 
 #[derive(PartialEq)]
 enum Channel {
@@ -28,8 +27,11 @@ pub struct InterferencePlot {
     channel: Channel,
     mode: Mode,
     line_index: u32,
+    range_start_index: u32,
+    range_end_index: u32,
     toasts: Toasts,
-    to_summarize: Vec<u32>,
+    to_summarize: HashSet<u32>,
+    time: String
 }
 
 impl InterferencePlot {
@@ -40,6 +42,7 @@ impl InterferencePlot {
     }
 
     pub fn new(path: String) -> InterferencePlot {
+        let now = chrono::Local::now();
         InterferencePlot {
             path: path.clone(),
             image: Self::load_image_from_path(path.clone()).unwrap(),
@@ -47,8 +50,11 @@ impl InterferencePlot {
             channel: Channel::Red,
             mode: Mode::Individual,
             line_index: 0,
+            range_start_index: 0,
+            range_end_index: 0,
             toasts: Toasts::default(),
-            to_summarize: vec![],
+            to_summarize: HashSet::new(),
+            time: now.format("%H:%M:%S").to_string(),
         }
     }
 }
@@ -59,7 +65,7 @@ impl AppWindow for InterferencePlot {
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
     ) -> Option<Box<dyn AppWindow>> {
-        egui::Window::new(format!("Analyze ({})", self.path))
+        egui::Window::new(format!("Analyze ({}, {})", self.path, self.time))
             .min_width(1000.0)
             .open(self.show.borrow_mut())
             .show(ctx, |ui| {
@@ -110,7 +116,7 @@ impl AppWindow for InterferencePlot {
 
                                 if !self.to_summarize.contains(&self.line_index) {
                                     if ui.button("Add to summarized graph").clicked() {
-                                        self.to_summarize.push(self.line_index);
+                                        self.to_summarize.insert(self.line_index);
                                     }
                                 } else {
                                     if ui.button("Remove from summarized graph").clicked() {
@@ -119,9 +125,22 @@ impl AppWindow for InterferencePlot {
                                             .iter()
                                             .position(|x| *x == self.line_index)
                                         {
-                                            self.to_summarize.remove(pos);
+                                            self.to_summarize.remove(&(pos as u32));
                                         }
                                     }
+                                }
+
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Start index: ");
+                                ui.add(egui::DragValue::new(&mut self.range_start_index).speed(0.1).clamp_range(0..=(self.image.width() - 1)));
+                                ui.label("End index: ");
+                                ui.add(egui::DragValue::new(&mut self.range_end_index).speed(0.1).clamp_range(self.range_start_index..=(self.image.width() - 1)));
+                                if ui.button("Add range").clicked() {
+                                    self.to_summarize.extend(self.range_start_index..=self.range_end_index);
+                                }
+                                if ui.button("Remove range").clicked() {
+                                    self.to_summarize.retain(|&x| x > self.range_end_index || x < self.range_start_index);
                                 }
                                 if ui.button("Sum all graphs").clicked() {
                                     self.to_summarize = (0..self.image.width()).collect();
@@ -250,7 +269,7 @@ impl AppWindow for InterferencePlot {
                                     if let Some(pos) =
                                         self.to_summarize.iter().position(|x| *x == pixel)
                                     {
-                                        self.to_summarize.remove(pos);
+                                        self.to_summarize.remove(&(pos as u32));
                                     }
                                 }
                             });
@@ -267,7 +286,7 @@ impl AppWindow for InterferencePlot {
     }
 }
 
-fn get_sum_points(image: &RgbaImage, color_channel: &str, x_coords: &Vec<u32>) -> Vec<[f64; 2]> {
+fn get_sum_points(image: &RgbaImage, color_channel: &str, x_coords: &HashSet<u32>) -> Vec<[f64; 2]> {
     let mut sum_points: Vec<[f64; 2]> = vec![];
     for x in x_coords {
         let points = get_points(&image, color_channel, x.to_owned());

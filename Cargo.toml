@@ -15,3 +15,4 @@ egui_extras = "0.22.0"
 image = { version = "0.24", features = ["jpeg", "png"] }
 clipboard = "0.5.0"
 egui-notify = "0.7.0"
+chrono = "0.4.41"
