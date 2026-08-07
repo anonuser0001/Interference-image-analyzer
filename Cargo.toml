@@ -10,9 +10,10 @@ egui = "0.22.0"
 eframe = "0.22.0"
 env_logger = "0.10.0"
 rfd = "0.11.4"
-raster = "0.2.0"
 egui_extras = "0.22.0"
-image = { version = "0.24", features = ["jpeg", "png"] }
+image = { version = "0.25.8", features = ["jpeg", "png"] }
 clipboard = "0.5.0"
 egui-notify = "0.7.0"
 chrono = "0.4.41"
+nokhwa = { version = "0.10.11", features = ["input-native", "output-wgpu"]}
+anyhow = "1.0.104"

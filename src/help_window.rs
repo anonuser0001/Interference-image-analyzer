@@ -155,4 +155,8 @@ impl AppWindow for Help {
     fn get_visibility(&self) -> bool {
         self.show
     }
+
+    fn get_name(&self) -> &str {
+        "Help"
+    }
 }

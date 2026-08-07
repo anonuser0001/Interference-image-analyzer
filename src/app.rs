@@ -10,6 +10,8 @@ pub trait AppWindow {
     ) -> Option<Box<dyn AppWindow>>;
 
     fn get_visibility(&self) -> bool;
+
+    fn get_name(&self) -> &str;
 }
 
 #[derive(Default)]
@@ -42,6 +44,13 @@ impl eframe::App for App {
                 }
             }
         }
+
+        self.windows.retain(|window| {
+            !new_windows
+                .iter()
+                .any(|new_window| window.get_name() == new_window.get_name())
+        });
+
         self.windows.append(new_windows.as_mut());
     }
 }

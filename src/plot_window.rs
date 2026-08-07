@@ -1,10 +1,10 @@
+use egui::{Color32, RichText};
 use egui_notify::Toasts;
 use std::borrow::BorrowMut;
 use std::collections::HashSet;
 use std::time::Duration;
-use egui::{Color32, RichText};
 
-use crate::app::AppWindow;
+use crate::{app::AppWindow, file_picker_window::ImageSource};
 use egui::plot::{Line, Plot, PlotPoints};
 use image::RgbaImage;
 
@@ -21,7 +21,8 @@ enum Mode {
 }
 
 pub struct InterferencePlot {
-    path: String,
+    name: String,
+    source: ImageSource,
     image: RgbaImage,
     show: bool,
     channel: Channel,
@@ -31,21 +32,28 @@ pub struct InterferencePlot {
     range_end_index: u32,
     toasts: Toasts,
     to_summarize: HashSet<u32>,
-    time: String
 }
 
 impl InterferencePlot {
-
     fn load_image_from_path(path: String) -> Result<RgbaImage, image::ImageError> {
-        let image = image::io::Reader::open(path)?.decode()?;
+        let image = image::ImageReader::open(path)?.decode()?;
         Ok(image.to_rgba8())
     }
 
-    pub fn new(path: String) -> InterferencePlot {
+    pub fn new(source: ImageSource, image: Option<RgbaImage>, path: String) -> InterferencePlot {
         let now = chrono::Local::now();
         InterferencePlot {
-            path: path.clone(),
-            image: Self::load_image_from_path(path.clone()).unwrap(),
+            name: if source == ImageSource::File {
+                format!("Analyze ({}, {})", path, now.format("%H:%M:%S").to_string())
+            } else {
+                String::from("Analyze Camera Frame")
+            },
+            source,
+            image: if source == ImageSource::File {
+                Self::load_image_from_path(path.clone()).unwrap()
+            } else {
+                image.unwrap()
+            },
             show: true,
             channel: Channel::Red,
             mode: Mode::Individual,
@@ -54,7 +62,6 @@ impl InterferencePlot {
             range_end_index: 0,
             toasts: Toasts::default(),
             to_summarize: HashSet::new(),
-            time: now.format("%H:%M:%S").to_string(),
         }
     }
 }
@@ -65,7 +72,11 @@ impl AppWindow for InterferencePlot {
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
     ) -> Option<Box<dyn AppWindow>> {
-        egui::Window::new(format!("Analyze ({}, {})", self.path, self.time))
+        if self.source == ImageSource::Camera {
+            self.mode = Mode::Summarized;
+            self.to_summarize.extend(0..=(self.image.width() - 1));
+        }
+        egui::Window::new(self.name.clone())
             .min_width(1000.0)
             .open(self.show.borrow_mut())
             .show(ctx, |ui| {
@@ -73,22 +84,24 @@ impl AppWindow for InterferencePlot {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         //-------------------------------Radio buttons---------------------------------------
-                        ui.horizontal(|ui| {
-                            ui.label("Mode: ");
-                            if self.to_summarize.len() > 0 {
-                                ui.radio_value(&mut self.mode, Mode::Individual, "Individual");
-                                ui.radio_value(&mut self.mode, Mode::Summarized, "Summarized");
-                            } else {
-                                self.mode = Mode::Individual;
-                                ui.radio_value(&mut self.mode, Mode::Individual, "Individual");
-                            }
-                        });
+                        if self.source == ImageSource::File {
+                            ui.horizontal(|ui| {
+                                ui.label("Mode: ");
+                                if self.to_summarize.len() > 0 {
+                                    ui.radio_value(&mut self.mode, Mode::Individual, "Individual");
+                                    ui.radio_value(&mut self.mode, Mode::Summarized, "Summarized");
+                                } else {
+                                    self.mode = Mode::Individual;
+                                    ui.radio_value(&mut self.mode, Mode::Individual, "Individual");
+                                }
+                            });
 
-                        ui.horizontal(|ui| {
-                            ui.label("Color channel: ");
-                            ui.radio_value(&mut self.channel, Channel::Red, "Red");
-                            ui.radio_value(&mut self.channel, Channel::Green, "Green");
-                        });
+                            ui.horizontal(|ui| {
+                                ui.label("Color channel: ");
+                                ui.radio_value(&mut self.channel, Channel::Red, "Red");
+                                ui.radio_value(&mut self.channel, Channel::Green, "Green");
+                            });
+                        }
                         //----------------------------------------------------------------------------------
 
                         //-------------------------------Index slider---------------------------------------
@@ -129,18 +142,30 @@ impl AppWindow for InterferencePlot {
                                         }
                                     }
                                 }
-
                             });
                             ui.horizontal(|ui| {
                                 ui.label("Start index: ");
-                                ui.add(egui::DragValue::new(&mut self.range_start_index).speed(0.1).clamp_range(0..=(self.image.width() - 1)));
+                                ui.add(
+                                    egui::DragValue::new(&mut self.range_start_index)
+                                        .speed(0.1)
+                                        .clamp_range(0..=(self.image.width() - 1)),
+                                );
                                 ui.label("End index: ");
-                                ui.add(egui::DragValue::new(&mut self.range_end_index).speed(0.1).clamp_range(self.range_start_index..=(self.image.width() - 1)));
+                                ui.add(
+                                    egui::DragValue::new(&mut self.range_end_index)
+                                        .speed(0.1)
+                                        .clamp_range(
+                                            self.range_start_index..=(self.image.width() - 1),
+                                        ),
+                                );
                                 if ui.button("Add range").clicked() {
-                                    self.to_summarize.extend(self.range_start_index..=self.range_end_index);
+                                    self.to_summarize
+                                        .extend(self.range_start_index..=self.range_end_index);
                                 }
                                 if ui.button("Remove range").clicked() {
-                                    self.to_summarize.retain(|&x| x > self.range_end_index || x < self.range_start_index);
+                                    self.to_summarize.retain(|&x| {
+                                        x > self.range_end_index || x < self.range_start_index
+                                    });
                                 }
                                 if ui.button("Sum all graphs").clicked() {
                                     self.to_summarize = (0..self.image.width()).collect();
@@ -214,68 +239,71 @@ impl AppWindow for InterferencePlot {
                         str_points += format!("{} {}", point[0], point[1]).as_str();
                         str_points += "\n";
                     }
-                    ui.vertical(|ui| {
-                        if ui.button("Copy coordinates to clipboard").clicked() {
-                            use clipboard::ClipboardContext;
-                            use clipboard::ClipboardProvider;
-                            let mut clip_ctx: ClipboardContext = ClipboardProvider::new().unwrap();
-                            clip_ctx.set_contents(str_points).unwrap();
+                    if self.source == ImageSource::File {
+                        ui.vertical(|ui| {
+                            if ui.button("Copy coordinates to clipboard").clicked() {
+                                use clipboard::ClipboardContext;
+                                use clipboard::ClipboardProvider;
+                                let mut clip_ctx: ClipboardContext =
+                                    ClipboardProvider::new().unwrap();
+                                clip_ctx.set_contents(str_points).unwrap();
 
-                            self.toasts
-                                .info("Copied to clipboard!")
-                                .set_duration(Some(Duration::from_secs(3)));
-                        }
-                        //----------------------------------------------------------------------------------
-
-                        //-------------------------------Graphs to summarize---------------------------------------
-                        if !self.to_summarize.is_empty() {
-                            ui.add_space(30.0);
-                            ui.label(RichText::new("Graphs to summarize:").strong());
-                            egui::ScrollArea::vertical().show(ui, |ui| {
-                                let mut points_to_remove: Vec<u32> = vec![];
-                                for pixel in self.to_summarize.iter() {
-                                    ui.horizontal(|ui| {
-                                        let points = get_points(
-                                            &self.image,
-                                            if self.channel == Channel::Red {
-                                                "r"
-                                            } else {
-                                                "g"
-                                            },
-                                            pixel.to_owned(),
-                                        );
-                                        let points: PlotPoints = PlotPoints::new(points);
-                                        let line = Line::new(points).color(
-                                            if self.channel == Channel::Red {
-                                                Color32::RED
-                                            } else {
-                                                Color32::GREEN
-                                            },
-                                        );
-                                        Plot::new(format!("plot{}", pixel))
-                                            .view_aspect(2.0)
-                                            .height(40.0)
-                                            .show(ui, |plot_ui| plot_ui.line(line));
-
-                                        if ui.button("Show").clicked() {
-                                            self.line_index = pixel.to_owned();
-                                        }
-                                        if ui.button(format!("Remove {}px", pixel)).clicked() {
-                                            points_to_remove.push(pixel.to_owned());
-                                        }
-                                    });
-                                }
-                                for pixel in points_to_remove {
-                                    if let Some(pos) =
-                                        self.to_summarize.iter().position(|x| *x == pixel)
-                                    {
-                                        self.to_summarize.remove(&(pos as u32));
-                                    }
-                                }
-                            });
+                                self.toasts
+                                    .info("Copied to clipboard!")
+                                    .set_duration(Some(Duration::from_secs(3)));
+                            }
                             //----------------------------------------------------------------------------------
-                        }
-                    });
+
+                            //-------------------------------Graphs to summarize---------------------------------------
+                            if !self.to_summarize.is_empty() {
+                                ui.add_space(30.0);
+                                ui.label(RichText::new("Graphs to summarize:").strong());
+                                egui::ScrollArea::vertical().show(ui, |ui| {
+                                    let mut points_to_remove: Vec<u32> = vec![];
+                                    for pixel in self.to_summarize.iter() {
+                                        ui.horizontal(|ui| {
+                                            let points = get_points(
+                                                &self.image,
+                                                if self.channel == Channel::Red {
+                                                    "r"
+                                                } else {
+                                                    "g"
+                                                },
+                                                pixel.to_owned(),
+                                            );
+                                            let points: PlotPoints = PlotPoints::new(points);
+                                            let line = Line::new(points).color(
+                                                if self.channel == Channel::Red {
+                                                    Color32::RED
+                                                } else {
+                                                    Color32::GREEN
+                                                },
+                                            );
+                                            Plot::new(format!("plot{}", pixel))
+                                                .view_aspect(2.0)
+                                                .height(40.0)
+                                                .show(ui, |plot_ui| plot_ui.line(line));
+
+                                            if ui.button("Show").clicked() {
+                                                self.line_index = pixel.to_owned();
+                                            }
+                                            if ui.button(format!("Remove {}px", pixel)).clicked() {
+                                                points_to_remove.push(pixel.to_owned());
+                                            }
+                                        });
+                                    }
+                                    for pixel in points_to_remove {
+                                        if let Some(pos) =
+                                            self.to_summarize.iter().position(|x| *x == pixel)
+                                        {
+                                            self.to_summarize.remove(&(pos as u32));
+                                        }
+                                    }
+                                });
+                                //----------------------------------------------------------------------------------
+                            }
+                        });
+                    }
                 });
             });
         None
@@ -284,9 +312,17 @@ impl AppWindow for InterferencePlot {
     fn get_visibility(&self) -> bool {
         self.show
     }
+
+    fn get_name(&self) -> &str {
+        &self.name
+    }
 }
 
-fn get_sum_points(image: &RgbaImage, color_channel: &str, x_coords: &HashSet<u32>) -> Vec<[f64; 2]> {
+fn get_sum_points(
+    image: &RgbaImage,
+    color_channel: &str,
+    x_coords: &HashSet<u32>,
+) -> Vec<[f64; 2]> {
     let mut sum_points: Vec<[f64; 2]> = vec![];
     for x in x_coords {
         let points = get_points(&image, color_channel, x.to_owned());
