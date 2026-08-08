@@ -1,6 +1,7 @@
 use std::{borrow::BorrowMut, path::Path};
 
 use egui::{TextureHandle, Vec2};
+use egui_extras::RetainedImage;
 use image::RgbaImage;
 use nokhwa::{
     pixel_format::{RgbAFormat, RgbFormat},
@@ -10,6 +11,25 @@ use nokhwa::{
 };
 
 use crate::{app::AppWindow, plot_window::InterferencePlot};
+
+#[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
+pub enum Channel {
+    Red,
+    Green,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
+pub enum StripeOrientation {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+pub struct PlotInitData {
+    pub channel: Channel,
+    pub path: String,
+    pub stripe_orientation: StripeOrientation,
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ImageSource {
@@ -21,18 +41,20 @@ pub struct FilePicker {
     picked_path: Option<String>,
     image: Option<TextureHandle>,
     image_rgba: Option<RgbaImage>,
+    retained_image: Option<RetainedImage>,
     show: bool,
     next_window: bool,
     image_source: ImageSource,
     available_cameras: Vec<CameraInfo>,
     selected_camera: usize,
     camera: Option<Camera>,
+    camera_channel: Channel,
+    camera_stripe_orientation: StripeOrientation,
 }
 impl FilePicker {
     pub fn new() -> FilePicker {
         let mut available_cameras = get_available_cameras();
         available_cameras.sort_by_key(|camera| camera.index().as_index().unwrap());
-        println!("{:?}", available_cameras);
         let camera = if let Some(info) = available_cameras.first() {
             let index = CameraIndex::Index(
                 info.index()
@@ -57,12 +79,15 @@ impl FilePicker {
             picked_path: None,
             image: None,
             image_rgba: None,
+            retained_image: None,
             show: true,
             next_window: false,
             image_source: ImageSource::File,
             available_cameras,
             selected_camera: 0,
             camera,
+            camera_channel: Channel::Red,
+            camera_stripe_orientation: StripeOrientation::Horizontal,
         }
     }
 
@@ -137,9 +162,29 @@ impl AppWindow for FilePicker {
                         self.selected_camera = selected_camera;
                         camera_changed = true;
                     }
+
+                    ui.horizontal(|ui| {
+                        ui.label("Color channel: ");
+                        ui.radio_value(&mut self.camera_channel, Channel::Red, "Red");
+                        ui.radio_value(&mut self.camera_channel, Channel::Green, "Green");
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("Stripe orientation: ");
+                        ui.radio_value(
+                            &mut self.camera_stripe_orientation,
+                            StripeOrientation::Horizontal,
+                            "Horizontal",
+                        );
+                        ui.radio_value(
+                            &mut self.camera_stripe_orientation,
+                            StripeOrientation::Vertical,
+                            "Vertical",
+                        );
+                    });
                 }
 
-                if ui.button("Open file…").clicked() {
+                if self.image_source == ImageSource::File && ui.button("Open file…").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Image", &["jpg", "png", "jpeg"])
                         .pick_file()
@@ -155,6 +200,13 @@ impl AppWindow for FilePicker {
                                 egui::TextureOptions::LINEAR,
                             ),
                         );
+                        self.retained_image = Some(RetainedImage::from_color_image(
+                            self.picked_path.as_ref().unwrap(),
+                            load_image_from_path(Path::new(
+                                self.picked_path.as_ref().unwrap().as_str(),
+                            ))
+                            .unwrap(),
+                        ));
                     }
                 }
 
@@ -165,8 +217,11 @@ impl AppWindow for FilePicker {
                             ui.monospace(picked_path);
                         });
 
-                        if let Some(texture) = &self.image {
-                            ui.add(egui::Image::new(texture, Vec2::new(300.0, 300.0)));
+                        if self.retained_image.is_some() {
+                            self.retained_image
+                                .as_ref()
+                                .unwrap()
+                                .show_max_size(ui, Vec2 { x: 300.0, y: 300.0 });
                             if ui.button("Analyze...").clicked() {
                                 self.next_window = true;
                             }
@@ -217,14 +272,22 @@ impl AppWindow for FilePicker {
                     return Some(Box::new(InterferencePlot::new(
                         ImageSource::File,
                         None,
-                        path,
+                        PlotInitData {
+                            channel: Channel::Red,
+                            path,
+                            stripe_orientation: StripeOrientation::Horizontal,
+                        },
                     )));
                 }
             } else if self.image_source == ImageSource::Camera {
                 return Some(Box::new(InterferencePlot::new(
                     ImageSource::Camera,
                     self.image_rgba.clone(),
-                    String::from("Camera"),
+                    PlotInitData {
+                        channel: self.camera_channel,
+                        path: String::from("Camera"),
+                        stripe_orientation: self.camera_stripe_orientation,
+                    },
                 )));
             }
         }
