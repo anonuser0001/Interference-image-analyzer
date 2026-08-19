@@ -1,6 +1,10 @@
-use std::{borrow::BorrowMut, path::Path};
+use std::{
+    borrow::BorrowMut,
+    path::{Path, PathBuf},
+};
 
-use egui::{TextureHandle, Vec2};
+use chrono::Local;
+use egui::{Button, RichText, TextureHandle, Vec2};
 use egui_extras::RetainedImage;
 use image::RgbaImage;
 use nokhwa::{
@@ -29,12 +33,20 @@ pub struct PlotInitData {
     pub channel: Channel,
     pub path: String,
     pub stripe_orientation: StripeOrientation,
+    pub fullscreen_enabled: bool,
+    pub camera_state: CameraState,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ImageSource {
     File,
     Camera,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CameraState {
+    Streaming,
+    Paused,
 }
 
 pub struct FilePicker {
@@ -50,7 +62,12 @@ pub struct FilePicker {
     camera: Option<Camera>,
     camera_channel: Channel,
     camera_stripe_orientation: StripeOrientation,
+    camera_state: CameraState,
+    camera_size: Vec2,
+    frame_path: String,
+    fullscreen_enabled: bool,
 }
+
 impl FilePicker {
     pub fn new() -> FilePicker {
         let mut available_cameras = get_available_cameras();
@@ -75,6 +92,7 @@ impl FilePicker {
         } else {
             None
         };
+        let default_path = std::env::current_dir().unwrap_or(PathBuf::from(""));
         FilePicker {
             picked_path: None,
             image: None,
@@ -88,6 +106,13 @@ impl FilePicker {
             camera,
             camera_channel: Channel::Red,
             camera_stripe_orientation: StripeOrientation::Horizontal,
+            camera_state: CameraState::Streaming,
+            camera_size: Vec2::new(0f32, 0f32),
+            frame_path: default_path
+                .into_os_string()
+                .into_string()
+                .unwrap_or(String::from("")),
+            fullscreen_enabled: false,
         }
     }
 
@@ -130,8 +155,6 @@ impl AppWindow for FilePicker {
         egui::Window::new("Choose an image")
             .open(self.show.borrow_mut())
             .show(ctx, |ui| {
-                ui.label("Open image you would like to analyze!");
-
                 ui.horizontal(|ui| {
                     ui.label("Image source: ");
                     ui.radio_value(&mut self.image_source, ImageSource::File, "File");
@@ -140,6 +163,8 @@ impl AppWindow for FilePicker {
 
                 if self.image_source == ImageSource::Camera {
                     let mut selected_camera = self.selected_camera;
+
+                    ui.add_space(10.0);
 
                     egui::ComboBox::from_label("Camera")
                         .selected_text(
@@ -163,6 +188,8 @@ impl AppWindow for FilePicker {
                         camera_changed = true;
                     }
 
+                    ui.add_space(10.0);
+
                     ui.horizontal(|ui| {
                         ui.label("Color channel: ");
                         ui.radio_value(&mut self.camera_channel, Channel::Red, "Red");
@@ -182,31 +209,59 @@ impl AppWindow for FilePicker {
                             "Vertical",
                         );
                     });
+
+                    ui.add_space(10.0);
+                    ui.checkbox(&mut self.fullscreen_enabled, "⛶ Fullscreen Enabled");
+                    ui.add_space(10.0);
+
+                    if self.camera_state == CameraState::Streaming {
+                        if ui
+                            .add_sized(
+                                [150.0, 35.0],
+                                Button::new(RichText::new("Pause").size(14.0)),
+                            )
+                            .clicked()
+                        {
+                            self.camera_state = CameraState::Paused;
+                        }
+                    } else if self.camera_state == CameraState::Paused {
+                        if ui
+                            .add_sized([150.0, 35.0], Button::new(RichText::new("Play").size(14.0)))
+                            .clicked()
+                        {
+                            self.camera_state = CameraState::Streaming;
+                        }
+                    }
+
+                    ui.add_space(10.0);
                 }
 
-                if self.image_source == ImageSource::File && ui.button("Open file…").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Image", &["jpg", "png", "jpeg"])
-                        .pick_file()
-                    {
-                        self.picked_path = Some(path.display().to_string());
-                        self.image = Some(
-                            ctx.load_texture(
+                if self.image_source == ImageSource::File {
+                    ui.label("Open image you would like to analyze!");
+                    if ui.button("Open file…").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("Image", &["jpg", "png", "jpeg"])
+                            .pick_file()
+                        {
+                            self.picked_path = Some(path.display().to_string());
+                            self.image = Some(
+                                ctx.load_texture(
+                                    self.picked_path.as_ref().unwrap(),
+                                    load_image_from_path(Path::new(
+                                        self.picked_path.as_ref().unwrap().as_str(),
+                                    ))
+                                    .unwrap(),
+                                    egui::TextureOptions::LINEAR,
+                                ),
+                            );
+                            self.retained_image = Some(RetainedImage::from_color_image(
                                 self.picked_path.as_ref().unwrap(),
                                 load_image_from_path(Path::new(
                                     self.picked_path.as_ref().unwrap().as_str(),
                                 ))
                                 .unwrap(),
-                                egui::TextureOptions::LINEAR,
-                            ),
-                        );
-                        self.retained_image = Some(RetainedImage::from_color_image(
-                            self.picked_path.as_ref().unwrap(),
-                            load_image_from_path(Path::new(
-                                self.picked_path.as_ref().unwrap().as_str(),
-                            ))
-                            .unwrap(),
-                        ));
+                            ));
+                        }
                     }
                 }
 
@@ -228,35 +283,62 @@ impl AppWindow for FilePicker {
                         }
                     }
                 } else if self.image_source == ImageSource::Camera {
-                    if let Some(camera) = self.camera.as_mut() {
-                        let cam_image_data = load_webcam_image(camera).unwrap();
-                        let texture = ctx.load_texture(
-                            "webcam",
-                            cam_image_data.0,
-                            egui::TextureOptions::LINEAR,
-                        );
-                        let aspect_ratio = cam_image_data.2 as f32 / cam_image_data.3 as f32;
-                        let display_width = if cam_image_data.2 as f32 > 300.0 {
-                            300.0
-                        } else {
-                            cam_image_data.2 as f32
-                        };
-                        let display_height = display_width / aspect_ratio;
-                        let display_height = if display_height > 300.0 {
-                            300.0
-                        } else {
-                            display_height
-                        };
-                        ui.add(egui::Image::new(
-                            &texture,
-                            Vec2::new(display_width, display_height),
-                        ));
+                    if self.camera_state == CameraState::Streaming {
+                        if let Some(camera) = self.camera.as_mut() {
+                            let cam_image_data = load_webcam_image(camera).unwrap();
+                            let texture = ctx.load_texture(
+                                "webcam",
+                                cam_image_data.0,
+                                egui::TextureOptions::LINEAR,
+                            );
+                            let aspect_ratio = cam_image_data.2 as f32 / cam_image_data.3 as f32;
+                            let display_width = if cam_image_data.2 as f32 > 300.0 {
+                                300.0
+                            } else {
+                                cam_image_data.2 as f32
+                            };
+                            let display_height = display_width / aspect_ratio;
+                            let display_height = if display_height > 300.0 {
+                                300.0
+                            } else {
+                                display_height
+                            };
+                            ui.add(egui::Image::new(
+                                &texture,
+                                Vec2::new(display_width, display_height),
+                            ));
 
-                        self.image = Some(texture);
-                        self.image_rgba = Some(cam_image_data.1);
+                            self.image = Some(texture);
+                            self.image_rgba = Some(cam_image_data.1);
+                            self.camera_size = Vec2::new(display_width, display_height);
 
-                        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                            self.next_window = true;
+                        }
+                    } else if self.camera_state == CameraState::Paused && self.image.is_some() {
+                        let image = self.image.as_ref().unwrap();
+                        ui.add(egui::Image::new(image, self.camera_size));
+
+                        ui.add_space(15.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Set destination path…").clicked() {
+                                if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                                    self.frame_path = path.display().to_string();
+                                }
+                            }
+                            ui.monospace(&self.frame_path);
+                        });
+                        ui.add_space(10.0);
                         self.next_window = true;
+                        if self.image_rgba.is_some() && ui.button("Save...").clicked() {
+                            let _ = self.image_rgba.as_ref().unwrap().save_with_format(
+                                Path::new(&self.frame_path).join(format!(
+                                    "frame_{}.png",
+                                    format!("{}", Local::now().format("%Y-%m-%d_%H-%M-%S"))
+                                )),
+                                image::ImageFormat::Png,
+                            );
+                        }
                     }
                 } else {
                     ui.label("No camera available");
@@ -276,6 +358,8 @@ impl AppWindow for FilePicker {
                             channel: Channel::Red,
                             path,
                             stripe_orientation: StripeOrientation::Horizontal,
+                            fullscreen_enabled: false,
+                            camera_state: CameraState::Paused,
                         },
                     )));
                 }
@@ -287,6 +371,8 @@ impl AppWindow for FilePicker {
                         channel: self.camera_channel,
                         path: String::from("Camera"),
                         stripe_orientation: self.camera_stripe_orientation,
+                        fullscreen_enabled: self.fullscreen_enabled,
+                        camera_state: self.camera_state,
                     },
                 )));
             }

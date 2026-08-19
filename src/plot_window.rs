@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::{
     app::AppWindow,
-    file_picker_window::{Channel, ImageSource, PlotInitData, StripeOrientation},
+    file_picker_window::{CameraState, Channel, ImageSource, PlotInitData, StripeOrientation},
 };
 use egui::plot::{Line, Plot, PlotPoints};
 use image::RgbaImage;
@@ -31,6 +31,8 @@ pub struct InterferencePlot {
     to_summarize: HashSet<u32>,
     stripe_orientation: StripeOrientation,
     summarized_points: Vec<[f64; 2]>,
+    fullscreen_enabled: bool,
+    camera_state: CameraState,
 }
 
 impl InterferencePlot {
@@ -71,6 +73,8 @@ impl InterferencePlot {
             to_summarize: HashSet::new(),
             stripe_orientation: init_data.stripe_orientation,
             summarized_points: vec![],
+            fullscreen_enabled: init_data.fullscreen_enabled,
+            camera_state: init_data.camera_state,
         }
     }
 }
@@ -348,15 +352,36 @@ impl AppWindow for InterferencePlot {
                             }
                         }
                         let points: PlotPoints = PlotPoints::new(points);
-                        let line = Line::new(points).color(if self.channel == Channel::Red {
-                            Color32::RED
+                        let line = Line::new(points)
+                            .width(if self.fullscreen_enabled {
+                                2.0f32
+                            } else {
+                                1.0f32
+                            })
+                            .color(if self.channel == Channel::Red {
+                                Color32::RED
+                            } else {
+                                Color32::GREEN
+                            });
+                        if self.source == ImageSource::File {
+                            Plot::new(format!("plot{}", self.line_index))
+                                .view_aspect(2.0)
+                                .height(350.0)
+                                .show(ui, |plot_ui| plot_ui.line(line));
                         } else {
-                            Color32::GREEN
-                        });
-                        Plot::new(format!("plot{}", self.line_index))
-                            .view_aspect(2.0)
-                            .height(350.0)
-                            .show(ui, |plot_ui| plot_ui.line(line));
+                            if !self.fullscreen_enabled {
+                                Plot::new(format!("camera_plot"))
+                                    .view_aspect(2.0)
+                                    .height(350.0)
+                                    .show(ui, |plot_ui| plot_ui.line(line));
+                            } else {
+                                let screen_rect = ctx.input(|i| i.screen_rect());
+                                Plot::new(format!("camera_plot"))
+                                    .width(screen_rect.width() * 0.9)
+                                    .height(screen_rect.height() * 0.9)
+                                    .show(ui, |plot_ui| plot_ui.line(line));
+                            }
+                        }
                     });
                     //----------------------------------------------------------------------------------
 
@@ -395,9 +420,17 @@ impl AppWindow for InterferencePlot {
                         str_points += format!("{} {}", point[0], point[1]).as_str();
                         str_points += "\n";
                     }
-                    if self.source == ImageSource::File {
-                        ui.vertical(|ui| {
-                            if ui.button("Copy coordinates to clipboard").clicked() {
+                    ui.vertical(|ui| {
+                        if self.source == ImageSource::File
+                            || self.camera_state == CameraState::Paused
+                        {
+                            if ui
+                                .add_sized(
+                                    [180.0, 30.0],
+                                    egui::Button::new("Copy coordinates to clipboard"),
+                                )
+                                .clicked()
+                            {
                                 use clipboard::ClipboardContext;
                                 use clipboard::ClipboardProvider;
                                 let mut clip_ctx: ClipboardContext =
@@ -408,8 +441,11 @@ impl AppWindow for InterferencePlot {
                                     .info("Copied to clipboard!")
                                     .set_duration(Some(Duration::from_secs(3)));
                             }
-                            //----------------------------------------------------------------------------------
+                        }
 
+                        //----------------------------------------------------------------------------------
+
+                        if self.source == ImageSource::File {
                             //-------------------------------Graphs to summarize---------------------------------------
                             if !self.to_summarize.is_empty() {
                                 ui.add_space(30.0);
@@ -449,10 +485,10 @@ impl AppWindow for InterferencePlot {
                                         );
                                     }
                                 });
-                                //----------------------------------------------------------------------------------
                             }
-                        });
-                    }
+                            //----------------------------------------------------------------------------------
+                        }
+                    });
                 });
             });
         None
