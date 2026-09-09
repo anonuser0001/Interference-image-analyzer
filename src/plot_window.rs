@@ -1,8 +1,9 @@
 use egui::{Color32, RichText};
 use egui_notify::Toasts;
-use std::borrow::BorrowMut;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 use std::time::Duration;
+use std::{borrow::BorrowMut, sync::Arc};
 
 use crate::{
     app::AppWindow,
@@ -10,6 +11,8 @@ use crate::{
 };
 use egui::plot::{Line, Plot, PlotPoints};
 use image::RgbaImage;
+
+pub type GraphsForSummary = Arc<Mutex<HashMap<String, Vec<[f64; 2]>>>>;
 
 #[derive(PartialEq)]
 enum Mode {
@@ -33,6 +36,7 @@ pub struct InterferencePlot {
     summarized_points: Vec<[f64; 2]>,
     fullscreen_enabled: bool,
     camera_state: CameraState,
+    graphs_for_summary: GraphsForSummary,
 }
 
 impl InterferencePlot {
@@ -45,6 +49,7 @@ impl InterferencePlot {
         source: ImageSource,
         image: Option<RgbaImage>,
         init_data: PlotInitData,
+        graphs_for_summary: GraphsForSummary,
     ) -> InterferencePlot {
         let now = chrono::Local::now();
         InterferencePlot {
@@ -75,6 +80,7 @@ impl InterferencePlot {
             summarized_points: vec![],
             fullscreen_enabled: init_data.fullscreen_enabled,
             camera_state: init_data.camera_state,
+            graphs_for_summary,
         }
     }
 }
@@ -416,11 +422,13 @@ impl AppWindow for InterferencePlot {
                     }
 
                     let mut str_points: String = String::new();
-                    for point in points {
+                    for point in points.iter() {
                         str_points += format!("{} {}", point[0], point[1]).as_str();
                         str_points += "\n";
                     }
                     ui.vertical(|ui| {
+                        let graphs_for_summary = self.graphs_for_summary.clone();
+                        let mut graphs_lock = graphs_for_summary.lock().unwrap();
                         if self.source == ImageSource::File
                             || self.camera_state == CameraState::Paused
                         {
@@ -440,6 +448,24 @@ impl AppWindow for InterferencePlot {
                                 self.toasts
                                     .info("Copied to clipboard!")
                                     .set_duration(Some(Duration::from_secs(3)));
+                            } else if graphs_lock.contains_key(&self.name)
+                                && ui
+                                    .add_sized(
+                                        [180.0, 30.0],
+                                        egui::Button::new("Remove coordinates from summary"),
+                                    )
+                                    .clicked()
+                            {
+                                graphs_lock.remove(&self.name);
+                            } else if !graphs_lock.contains_key(&self.name)
+                                && ui
+                                    .add_sized(
+                                        [180.0, 30.0],
+                                        egui::Button::new("Send coordinates to summary"),
+                                    )
+                                    .clicked()
+                            {
+                                graphs_lock.insert(self.name.clone(), points);
                             }
                         }
 

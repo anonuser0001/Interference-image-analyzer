@@ -14,7 +14,10 @@ use nokhwa::{
     Camera,
 };
 
-use crate::{app::AppWindow, plot_window::InterferencePlot};
+use crate::{
+    app::AppWindow,
+    plot_window::{GraphsForSummary, InterferencePlot},
+};
 
 #[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
 pub enum Channel {
@@ -66,10 +69,11 @@ pub struct FilePicker {
     camera_size: Vec2,
     frame_path: String,
     fullscreen_enabled: bool,
+    graphs_for_summary: GraphsForSummary,
 }
 
 impl FilePicker {
-    pub fn new() -> FilePicker {
+    pub fn new(graphs_for_summary: GraphsForSummary) -> FilePicker {
         let mut available_cameras = get_available_cameras();
         available_cameras.sort_by_key(|camera| camera.index().as_index().unwrap());
         let camera = if let Some(info) = available_cameras.first() {
@@ -113,6 +117,7 @@ impl FilePicker {
                 .into_string()
                 .unwrap_or(String::from("")),
             fullscreen_enabled: false,
+            graphs_for_summary,
         }
     }
 
@@ -349,6 +354,7 @@ impl AppWindow for FilePicker {
         }
         if self.next_window {
             self.next_window = false;
+            let graphs = self.graphs_for_summary.clone();
             if self.image_source == ImageSource::File {
                 if let Some(path) = self.picked_path.clone() {
                     return Some(Box::new(InterferencePlot::new(
@@ -361,6 +367,7 @@ impl AppWindow for FilePicker {
                             fullscreen_enabled: false,
                             camera_state: CameraState::Paused,
                         },
+                        graphs,
                     )));
                 }
             } else if self.image_source == ImageSource::Camera {
@@ -374,6 +381,7 @@ impl AppWindow for FilePicker {
                         fullscreen_enabled: self.fullscreen_enabled,
                         camera_state: self.camera_state,
                     },
+                    graphs,
                 )));
             }
         }
